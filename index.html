@@ -280,17 +280,120 @@ const mobileMenu = document.getElementById('mobileMenu');
 menuBtn.addEventListener('click', () => mobileMenu.classList.toggle('open'));
 mobileMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => mobileMenu.classList.remove('open')));
 
-function mockConnect(btn){
-  btn.addEventListener('click', () => {
-    const orig = btn.textContent;
-    btn.textContent = 'Connecting…';
-    btn.disabled = true;
-    setTimeout(() => { btn.textContent = '0x7a…F3c2 ✓'; btn.disabled = false; }, 900);
-    setTimeout(() => { btn.textContent = orig; }, 4000);
+// ---- Real wallet connection (BNB Chain mainnet) ----
+const BNB_MAINNET = {
+  chainId: '0x38', // 56
+  chainName: 'BNB Smart Chain',
+  nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
+  rpcUrls: ['https://bsc-dataseed.binance.org/'],
+  blockExplorerUrls: ['https://bscscan.com']
+};
+const connectDesktop = document.getElementById('connectDesktop');
+const connectMobile = document.getElementById('connectMobile');
+const walletBtns = [connectDesktop, connectMobile].filter(Boolean);
+let connectedAccount = null;
+
+const shortAddr = (addr) => addr ? addr.slice(0, 6) + '…' + addr.slice(-4) : '';
+
+function paintButtons(label, title) {
+  walletBtns.forEach((b) => {
+    b.textContent = label;
+    if (title !== undefined) b.title = title;
+    b.disabled = false;
   });
 }
-mockConnect(document.getElementById('connectDesktop'));
-mockConnect(document.getElementById('connectMobile'));
+
+function paintDisconnected(hasProvider) {
+  connectedAccount = null;
+  if (hasProvider) {
+    connectDesktop.textContent = 'Connect Wallet';
+    connectMobile.textContent = 'Connect';
+    walletBtns.forEach((b) => { b.title = ''; b.disabled = false; });
+  } else {
+    paintButtons('Install Wallet', 'No EVM wallet detected — install MetaMask');
+  }
+}
+
+async function ensureBnbChain(provider) {
+  const current = await provider.request({ method: 'eth_chainId' });
+  if (current === BNB_MAINNET.chainId) return;
+  try {
+    await provider.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: BNB_MAINNET.chainId }]
+    });
+  } catch (err) {
+    if (err && err.code === 4902) {
+      await provider.request({
+        method: 'wallet_addEthereumChain',
+        params: [BNB_MAINNET]
+      });
+    } else {
+      throw err;
+    }
+  }
+}
+
+async function connectWallet() {
+  const provider = window.ethereum;
+  if (!provider) {
+    window.open('https://metamask.io/download/', '_blank', 'noopener');
+    return;
+  }
+  paintButtons('Connecting…');
+  walletBtns.forEach((b) => { b.disabled = true; });
+  try {
+    const accounts = await provider.request({ method: 'eth_requestAccounts' });
+    if (!accounts || !accounts.length) throw new Error('No accounts returned');
+    await ensureBnbChain(provider);
+    connectedAccount = accounts[0];
+    const label = shortAddr(connectedAccount) + ' ✓';
+    paintButtons(label, connectedAccount);
+    connectMobile.textContent = shortAddr(connectedAccount) + ' ✓';
+  } catch (err) {
+    console.warn('Wallet connection failed:', err);
+    paintButtons(connectedAccount ? shortAddr(connectedAccount) + ' ✓' : 'Connect Wallet');
+    connectMobile.textContent = connectedAccount ? shortAddr(connectedAccount) + ' ✓' : 'Connect';
+    if (err && err.code === 4001) return; // user rejected — stay quiet
+    alert('Could not connect wallet: ' + ((err && err.message) || err));
+  }
+}
+
+async function silentReconnect() {
+  const provider = window.ethereum;
+  if (!provider) { paintDisconnected(false); return; }
+  try {
+    const accounts = await provider.request({ method: 'eth_accounts' });
+    if (accounts && accounts.length) {
+      connectedAccount = accounts[0];
+      paintButtons(shortAddr(connectedAccount) + ' ✓', connectedAccount);
+      connectMobile.textContent = shortAddr(connectedAccount) + ' ✓';
+    } else {
+      paintDisconnected(true);
+    }
+  } catch {
+    paintDisconnected(true);
+  }
+}
+
+walletBtns.forEach((b) => b.addEventListener('click', connectWallet));
+
+if (window.ethereum) {
+  window.ethereum.on('accountsChanged', (accounts) => {
+    if (accounts && accounts.length) {
+      connectedAccount = accounts[0];
+      paintButtons(shortAddr(connectedAccount) + ' ✓', connectedAccount);
+      connectMobile.textContent = shortAddr(connectedAccount) + ' ✓';
+    } else {
+      paintDisconnected(true);
+    }
+  });
+  window.ethereum.on('chainChanged', () => window.location.reload());
+  window.addEventListener('load', silentReconnect);
+  silentReconnect();
+} else {
+  paintDisconnected(false);
+}
 </script>
 </body>
 </html>
